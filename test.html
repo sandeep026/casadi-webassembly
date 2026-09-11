@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+  <title>CasADi Studio | Browser Optimization IDE</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<h1><span>∿</span> CasADi Studio</h1>
+<p>Build and solve symbolic models in JavaScript, run CasADi directly in the browser, and explore solver output, variables, and plotted trajectories.</p>
+    <div class="toolbar">
+      <button id="new-script">New</button>
+      <button id="upload-script">Open</button>
+      <input id="file-input" type="file" accept=".js,text/javascript" hidden>
+      <select id="script-choice" aria-label="Choose an example"></select>
+      <div class="actions">
+        <button id="download-script">Download</button>
+        <button id="editor-run" class="primary" disabled>Run script</button>
+      </div>
+      <span id="editor-status" class="status">Loading WASM runtime...</span>
+    </div>
+<div class="panel editor"><div id="line-numbers" class="line-numbers"></div><textarea id="code-editor" spellcheck="false" aria-label="CasADi JavaScript editor"></textarea></div>
+    <div class="panel output">
+      <h2>Output <span id="run-time" class="status"></span></h2>
+      <pre id="editor-output">Choose an example or open blank.js to start writing.</pre>
+    </div>
+
+    <section class="inspector-grid">
+      <div class="panel inspector">
+        <div class="panel-heading"><h2>Variables</h2><button id="clear-variables">Clear</button></div>
+        <div id="variables" class="variables"><span class="muted">Call <code>inspect(name, value)</code> in your script.</span></div>
+      </div>
+      <div class="panel inspector">
+        <div class="panel-heading"><h2>Plot editor</h2><button id="clear-plot">Clear</button></div>
+        <div class="plot-controls">
+          <select id="x-dataset" aria-label="X dataset"><option value="">X dataset</option></select>
+          <select id="y-dataset" aria-label="Y dataset"><option value="">Y dataset</option></select>
+          <button id="plot-data">Plot</button>
+        </div>
+        <canvas id="plot" width="700" height="280" aria-label="Dataset plot"></canvas>
+        <p class="plot-help">Call <code>dataset(name, values)</code> to add numeric data.</p>
+      </div>
+    </section>
+</main>
+  <script src="examples.js?v=20260911-2"></script>
+  <script src="app.js?v=20260911-2"></script>
+</body>
+</html>
