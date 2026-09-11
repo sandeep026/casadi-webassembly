@@ -34,3 +34,7 @@ dataset("speed", [0, 2, 3, 4]);
 ```
 
 After running, choose two datasets in Plot editor and press Plot. Labeled output such as `print("speed =", values)` is also promoted automatically into the Variables and Plot panels. Uploaded scripts can use the same helpers.
+
+## Bugs
+1. rootfinder object does not work
+
