@@ -9,17 +9,17 @@ const EXAMPLES = [
   "multipoint_simulation.js", "nlp_codegen.js", "nlp_sensitivities.js",
   "parallel_map.js", "race_car.js", "rocket.js", "rosenbrock.js",
   "sensitivity_analysis.js", "simple_lp.js", "simple_nlp.js", "vdp_collocation.js",
-  "vdp_dynamic_programming.js", "vdp_indirect_multiple_shooting.js",
+  "vdp_dynamic_programming.js", "vdp_indirect_multiple_shooting.js", "browser_guide.js",
   "lgl_pseudospectral_opti.js", "blank.js"
 ];
 const PLUGINS = {
   "chain_qp.js": [["conic", "qpoases"]],
   "simple_lp.js": [["conic", "qpoases"]],
   "nlp_sensitivities.js": [["conic", "qpoases"]],
-  "dae_multiple_shooting.js": [["integrator", "collocation"]],
-  "dae_single_shooting.js": [["integrator", "collocation"]],
+  "dae_multiple_shooting.js": [["linsol", "qr"], ["rootfinder", "newton"], ["integrator", "collocation"]],
+  "dae_single_shooting.js": [["linsol", "qr"], ["rootfinder", "newton"], ["integrator", "collocation"]],
   "multipoint_simulation.js": [["integrator", "rk"]],
-  "sensitivity_analysis.js": [["integrator", "rk"], ["integrator", "collocation"]],
+  "sensitivity_analysis.js": [["linsol", "qr"], ["rootfinder", "newton"], ["integrator", "rk"], ["integrator", "collocation"]],
   "vdp_indirect_multiple_shooting.js": [["integrator", "rk"], ["linsol", "qr"]]
 };
 
@@ -30,9 +30,9 @@ const choice = document.querySelector("#script-choice");
 const runButton = document.querySelector("#editor-run");
 const status = document.querySelector("#editor-status");
 const runTime = document.querySelector("#run-time");
-const variables = document.querySelector("#variables");
 const fileInput = document.querySelector("#file-input");
 const datasets = new Map();
+const variableRecords = new Map();
 const plotCanvas = document.querySelector("#plot");
 const xDataset = document.querySelector("#x-dataset");
 const yDataset = document.querySelector("#y-dataset");
@@ -128,6 +128,10 @@ function requiredPlugins(source, file) {
   };
   for (const match of source.matchAll(/\b(integrator|qpsol|conic|rootfinder|linsol)\s*\([^,]+,\s*["']([^"']+)["']/g)) {
     const type = match[1] === "integrator" ? "integrator" : match[1] === "rootfinder" ? "rootfinder" : match[1] === "linsol" ? "linsol" : "conic";
+    if (type === "integrator" && match[2] === "collocation") {
+      add("linsol", "qr");
+      add("rootfinder", "newton");
+    }
     add(type, match[2]);
   }
   for (const match of source.matchAll(/(?:linear_solver|"linear_solver")\s*[:=]\s*["']([^"']+)["']/g)) {
@@ -143,7 +147,7 @@ function requiredPlugins(source, file) {
 function runnableSource(source) {
   const definesExample = /\b(?:async\s+)?function\s+example\s*\(/.test(source);
   const callsExample = /\bexample\s*\(\s*ca\s*,/.test(source);
-  return definesExample && !callsExample ? `${source}\n\nawait example(ca, print);` : source;
+  return definesExample && !callsExample ? `${source}\n\nawait example(ca, print, inspect, dataset);` : source;
 }
 
 async function readExample(file) {
@@ -157,7 +161,7 @@ async function readExample(file) {
       if (!response.ok) throw new Error(`${file}: ${response.status} ${response.statusText}`);
       source = normalizeExample(await response.text());
     }
-    sourceCache.set(file, file === "blank.js" ? source : `${source}\n\nawait example(ca, print);`);
+    sourceCache.set(file, file === "blank.js" ? source : `${source}\n\nawait example(ca, print, inspect, dataset);`);
   }
   return sourceCache.get(file);
 }
@@ -166,20 +170,13 @@ function updateLineNumbers() {
   lineNumbers.textContent = Array.from({ length: editor.value.split("\n").length }, (_, index) => index + 1).join("\n");
 }
 
-function print(...values) {
+function appendOutput(...values) {
   output.append(document.createTextNode(values.map(String).join(" ") + "\n"));
-  if (values.length > 1 && typeof values[0] === "string") {
-    inspect(values[0], values.slice(1).map(displayValue).join(" "));
-    for (const value of values.slice(1)) addPrintedDataset(values[0], value);
-  } else if (values.length === 1 && typeof values[0] === "string") {
-    const separator = values[0].match(/^\s*([^=:]+)\s*[=:]\s*(.+)$/);
-    if (separator) {
-      const name = separator[1].trim();
-      const value = separator[2].trim();
-      inspect(name, value);
-      addPrintedDataset(name, value);
-    }
-  }
+}
+
+function print(...values) {
+  appendOutput(...values);
+  if (values.length === 1 && typeof values[0] === "string") capturePrintedResult(values[0]);
 }
 
 function displayValue(value) {
@@ -188,32 +185,87 @@ function displayValue(value) {
   try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
-function inspect(name, value) {
-  const row = document.createElement("article");
-  row.className = "variable";
-  const label = document.createElement("span");
-  label.className = "variable-name";
-  label.textContent = name;
-  const actions = document.createElement("span");
-  actions.className = "variable-actions";
-  const copy = document.createElement("button");
-  copy.textContent = "Copy";
-  copy.onclick = () => navigator.clipboard?.writeText(displayValue(value));
-  const remove = document.createElement("button");
-  remove.textContent = "Delete";
-  remove.onclick = () => row.remove();
-  actions.append(copy, remove);
-  const content = document.createElement("pre");
-  content.className = "variable-value";
-  content.textContent = displayValue(value);
-  row.append(label, actions, content);
-  variables.append(row);
+function displayPreview(value, limit = 180) {
+  const text = displayValue(value);
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function serializableValue(value) {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.map(serializableValue);
+  if (ArrayBuffer.isView(value)) return Array.from(value).map(serializableValue);
+  if (value && typeof value.nonzeros === "function") return Array.from(value.nonzeros()).map(Number);
+  return displayValue(value);
+}
+
+function valueType(value) {
+  if (value && typeof value.type_name === "function") return value.type_name();
+  if (value && value.constructor?.name) return value.constructor.name;
+  return value === null ? "null" : typeof value;
+}
+
+function valueShape(value) {
+  if (value && typeof value.size1 === "function" && typeof value.size2 === "function") {
+    return `${value.size1()} x ${value.size2()}`;
+  }
+  if (Array.isArray(value)) return `${value.length} items`;
+  if (ArrayBuffer.isView(value)) return `${value.length} items`;
+  return "-";
+}
+
+function copyText(value) {
+  navigator.clipboard?.writeText(String(value));
+}
+
+function renderVariables() {
+  const body = document.querySelector("#variables-body");
+  body.replaceChildren();
+  if (!variableRecords.size) {
+    body.innerHTML = '<tr><td colspan="5" class="muted">No variables published.</td></tr>';
+    return;
+  }
+  for (const record of variableRecords.values()) {
+    const row = document.createElement("tr");
+    row.innerHTML = `<td class="variable-name"></td><td></td><td></td><td class="table-value"></td><td></td>`;
+    row.children[0].textContent = record.name;
+    row.children[1].textContent = record.type;
+    row.children[2].textContent = record.shape;
+    row.children[3].textContent = record.display;
+    const copy = document.createElement("button");
+    copy.textContent = "Copy";
+    copy.onclick = () => copyText(JSON.stringify(record.value));
+    row.children[4].append(copy);
+    body.append(row);
+  }
+}
+
+function inspect(name, value, metadata = {}) {
+  variableRecords.set(String(name), {
+    name: String(name),
+    type: metadata.type || valueType(value),
+    shape: metadata.shape || valueShape(value),
+    display: displayPreview(value),
+    value: serializableValue(value),
+  });
+  renderVariables();
 }
 
 function numericValues(values) {
   if (Array.isArray(values)) return values.flat(Infinity).map(Number).filter(Number.isFinite);
   if (ArrayBuffer.isView(values)) return Array.from(values).map(Number).filter(Number.isFinite);
   return String(values).match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/g)?.map(Number) || [];
+}
+
+function capturePrintedResult(message) {
+  const match = message.match(/^\s*([^=:]+?)\s*[:=]\s*(.+)$/);
+  if (!match) return;
+  const name = match[1].trim();
+  const valueText = match[2].trim();
+  const numbers = numericValues(valueText);
+  inspect(name, valueText, { type: "logged text", shape: "-" });
+  if (numbers.length >= 3 && /(?:trajectory|time|state|control|position|speed|throttle|u\b|x\b|y\b)/i.test(name)) {
+    dataset(name, numbers);
+  }
 }
 
 function refreshDatasetChoices() {
@@ -233,17 +285,59 @@ function dataset(name, values) {
     datasets.set("time", numbers.map((_, index) => currentTimeHorizon * index / (numbers.length - 1)));
   }
   refreshDatasetChoices();
+  renderDatasets();
 }
 
-function addPrintedDataset(name, value) {
-  const numbers = numericValues(value);
-  if (numbers.length < 2) return;
-  const cleanName = String(name).trim().replace(/[^\w-]+/g, "_");
-  datasets.set(cleanName, numbers);
-  if (!datasets.has("time") && cleanName !== "time" && numbers.length > 2) {
-    datasets.set("time", numbers.map((_, index) => currentTimeHorizon * index / (numbers.length - 1)));
+function renderDatasets() {
+  const body = document.querySelector("#datasets-body");
+  body.replaceChildren();
+  if (!datasets.size) {
+    body.innerHTML = '<tr><td colspan="4" class="muted">No datasets published.</td></tr>';
+    return;
   }
+  for (const [name, values] of datasets) {
+    const row = document.createElement("tr");
+    row.innerHTML = `<td class="variable-name"></td><td>numeric</td><td></td><td class="table-value"></td>`;
+    row.children[0].textContent = name;
+    row.children[2].textContent = values.length;
+    row.children[3].textContent = values.slice(0, 4).join(", ") + (values.length > 4 ? ", ..." : "");
+    body.append(row);
+  }
+}
+
+function downloadFile(name, content, type) {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([content], { type }));
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function exportResults() {
+  downloadFile(`${choice.value.replace(/\.js$/, "")}-results.json`, JSON.stringify({
+    example: choice.value,
+    casadi: "3.8.1",
+    source: editor.value,
+    variables: Object.fromEntries([...variableRecords].map(([name, record]) => [name, record])),
+    datasets: Object.fromEntries(datasets),
+    output: output.textContent,
+  }, null, 2), "application/json");
+}
+
+function exportDatasets() {
+  const names = [...datasets.keys()];
+  const length = Math.max(0, ...[...datasets.values()].map((values) => values.length));
+  const rows = [names.join(",")];
+  for (let index = 0; index < length; index++) {
+    rows.push(names.map((name) => datasets.get(name)[index] ?? "").join(","));
+  }
+  downloadFile(`${choice.value.replace(/\.js$/, "")}-datasets.csv`, rows.join("\n"), "text/csv");
+}
+
+function clearDatasets() {
+  datasets.clear();
   refreshDatasetChoices();
+  renderDatasets();
 }
 
 function drawPlot() {
@@ -285,7 +379,7 @@ async function runScript() {
   output.textContent = "";
   status.textContent = "Starting fresh WASM runtime...";
   status.className = "status";
-  window.consoleOutput = print;
+  window.consoleOutput = appendOutput;
 
   try {
     const executableSource = normalizeBrowserSolvers(normalizeCasadiInputs(runnableSource(editor.value)));
@@ -295,9 +389,11 @@ async function runScript() {
       await loadPlugin(runCasadi, type, name);
     }
     status.textContent = "Running...";
-    variables.replaceChildren();
+    variableRecords.clear();
+    renderVariables();
     datasets.clear();
     refreshDatasetChoices();
+    renderDatasets();
     const execute = new Function("ca", "print", "inspect", "dataset", `return (async () => { ${executableSource}\n })();`);
     await execute(runCasadi, print, inspect, dataset);
     status.textContent = "Completed";
@@ -347,9 +443,11 @@ fileInput.addEventListener("change", async () => {
 editor.addEventListener("input", updateLineNumbers);
 editor.addEventListener("scroll", () => { lineNumbers.scrollTop = editor.scrollTop; });
 document.querySelector("#editor-run").addEventListener("click", runScript);
-document.querySelector("#clear-variables").addEventListener("click", () => variables.replaceChildren());
-document.querySelector("#clear-plot").addEventListener("click", () => { datasets.clear(); refreshDatasetChoices(); plotCanvas.getContext("2d").clearRect(0, 0, plotCanvas.width, plotCanvas.height); });
+document.querySelector("#clear-variables").addEventListener("click", () => { variableRecords.clear(); renderVariables(); });
+document.querySelector("#clear-plot").addEventListener("click", () => { clearDatasets(); plotCanvas.getContext("2d").clearRect(0, 0, plotCanvas.width, plotCanvas.height); });
 document.querySelector("#plot-data").addEventListener("click", drawPlot);
+document.querySelector("#export-results").addEventListener("click", exportResults);
+document.querySelector("#export-datasets").addEventListener("click", exportDatasets);
 document.querySelector("#download-script").addEventListener("click", () => {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([editor.value], { type: "text/javascript" }));
@@ -357,6 +455,9 @@ document.querySelector("#download-script").addEventListener("click", () => {
   link.click();
   URL.revokeObjectURL(link.href);
 });
+
+renderVariables();
+renderDatasets();
 
 selectExample("blank.js");
 loadCasadi(CASADI_BASE).then((module) => {
